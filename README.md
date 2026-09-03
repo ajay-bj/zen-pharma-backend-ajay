@@ -189,3 +189,46 @@ Set in **Settings → Secrets and variables → Actions**:
 ## Full Deployment Guide
 
 See [`implementation.md`](./implementation.md) for the complete setup guide including OIDC, IAM, ECR, ArgoCD, and GitOps configuration.
+
+---
+
+## Required Steps — DEV-only CI (quick reference for the ajay-bj fork)
+
+> Scope: **DEV only. Do NOT promote to qa/prod.** Assumes infra + ArgoCD/ESO are up (see
+> `zen-infra-ajay`) and ECR repos exist.
+
+**1. Set GitHub secrets & variables on this repo**
+- Secrets: `AWS_ACCOUNT_ID=304312474711`, `GITOPS_TOKEN` (PAT with `contents:write` on `ajay-bj/zen-gitops-ajay`).
+- Variable: `GITOPS_REPO=ajay-bj/zen-gitops-ajay`.
+- IAM trust for the OIDC role `pharma-dev-github-actions-role` must allow `repo:ajay-bj/zen-pharma-backend-ajay:*`.
+
+**2. Trigger a build (per service) — get images into ECR**
+CI runs on push to `develop` when files under `<service>/**` change (path filter). A repo-ROOT file does
+NOT trigger it. To (re)build a service, touch a file inside its folder and push:
+```bash
+git checkout develop
+# e.g. build qc-service:
+printf 'ci-trigger\n' > qc-service/.ci-trigger
+git add qc-service/.ci-trigger
+git commit -m "ci: trigger qc-service build"
+git push origin develop
+```
+Each `ci-<service>.yml` → build → push `sha-<7>` to ECR → commit the tag to
+`zen-gitops-ajay/envs/dev/values-<service>.yaml`. Run once for all 8 services (incl. qc-service).
+
+**3. Fork-safe gates (already configured in `_java-build.yml` / `_node-build.yml`)**
+CodeQL init/analyze and "Upload Trivy SARIF" are `if:false` (need GitHub Code Scanning). OWASP /
+npm audit / Trivy scan are advisory (non-blocking). This lets the build reach ECR push + Cosign sign
+on a personal fork.
+
+**4. QA/PROD disabled (keep it that way)**
+The `open-qa-pr` job is `if:false` in all `ci-*.yml`, so no QA promotion PRs are created. Do not enable
+qa/prod for this fork.
+
+**5. Verify (in the cluster)**
+```bash
+aws ecr list-images --repository-name <service> --region us-east-1 --query 'imageIds[].imageTag'
+kubectl get pods -n dev            # service pod should be 1/1 Running
+```
+Pods stuck `ImagePullBackOff` = image not in ECR yet (trigger CI). `CreateContainerConfigError` =
+ExternalSecrets not synced (check `kubectl get externalsecret -n dev`).
