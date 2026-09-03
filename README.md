@@ -1,13 +1,16 @@
 # zen-pharma-backend
 
-> **Interview questions** have been consolidated → see [zen-interview-prep](../zen-interview-prep/README.md)
+Spring Boot + Node.js microservices monorepo for the Zen Pharma platform. Contains 8 backend
+services (7 Java 17 / Spring Boot + 1 Node.js) deployed to AWS EKS via GitOps (ArgoCD).
 
-Spring Boot microservices monorepo for the Zen Pharma platform. Contains 7 backend services built with Java 17 and deployed to AWS EKS via GitOps (ArgoCD).
+> **This fork (`ajay-bj`) — current status (2026-09-03):** all backend services build in CI and
+> deploy to the dev environment. Every service has an image in ECR (account `304312474711`) and
+> all pods are `Running`. Image tag currently deployed: `sha-4088c8f`.
 
-> **Companion repos** (replace `YOUR_GITHUB_USERNAME` with your GitHub username):
-> - `https://github.com/YOUR_GITHUB_USERNAME/zen-infra` — Terraform for AWS infrastructure (EKS, RDS, ECR, IAM)
-> - `https://github.com/YOUR_GITHUB_USERNAME/zen-pharma-frontend` — React frontend
-> - `https://github.com/YOUR_GITHUB_USERNAME/zen-gitops` — ArgoCD apps + Helm values
+> **Companion forks:**
+> - [`zen-infra-ajay`](https://github.com/ajay-bj/zen-infra-ajay) — Terraform for AWS infrastructure (EKS, RDS, ECR, IAM)
+> - [`zen-pharma-frontend-ajay`](https://github.com/ajay-bj/zen-pharma-frontend-ajay) — React frontend
+> - [`zen-gitops-ajay`](https://github.com/ajay-bj/zen-gitops-ajay) — ArgoCD apps + Helm values
 
 ---
 
@@ -19,9 +22,10 @@ Spring Boot microservices monorepo for the Zen Pharma platform. Contains 7 backe
 | `auth-service` | JWT authentication and user management | 8081 | PostgreSQL |
 | `drug-catalog-service` | Drug catalogue — search, categories, formulary | 8082 | PostgreSQL |
 | `inventory-service` | Stock levels, replenishment, batch tracking | 8083 | PostgreSQL |
-| `manufacturing-service` | Production orders and batch manufacturing | 8084 | PostgreSQL |
-| `supplier-service` | Supplier management and purchase orders | 8085 | PostgreSQL |
-| `notification-service` | Email/SMS notifications (Node.js 20 / Express) | 8086 | No |
+| `supplier-service` | Supplier management and purchase orders | 8084 | PostgreSQL |
+| `manufacturing-service` | Production orders and batch manufacturing | 8085 | PostgreSQL |
+| `qc-service` | Quality control — batch checks and results | 8086 | PostgreSQL (H2 embedded) |
+| `notification-service` | Email/SMS notifications (Node.js 20 / Express) | 3000 | No |
 
 ---
 
@@ -41,9 +45,11 @@ zen-pharma-backend/
 │   └── ...
 ├── manufacturing-service/
 │   └── ...
-├── notification-service/          ← Node.js (not Java)
-│   └── ...
 ├── supplier-service/
+│   └── ...
+├── qc-service/                    ← Quality control (Java)
+│   └── ...
+├── notification-service/          ← Node.js (not Java)
 │   └── ...
 └── .github/
     └── workflows/
@@ -51,8 +57,8 @@ zen-pharma-backend/
         ├── _java-pr-check.yml     ← Reusable: lightweight PR check
         ├── _node-build.yml        ← Reusable: full Node.js CI pipeline
         ├── _node-pr-check.yml     ← Reusable: lightweight Node PR check
-        ├── ci-<service>.yml       ← Full build + DEV deploy + QA PR (7 files)
-        ├── ci-pr-<service>.yml    ← Feature branch check (7 files)
+        ├── ci-<service>.yml       ← Full build + DEV deploy + QA PR (8 files)
+        ├── ci-pr-<service>.yml    ← Feature branch check (8 files)
         └── promote-prod.yml       ← Manual PROD promotion trigger
 ```
 
@@ -60,27 +66,32 @@ zen-pharma-backend/
 
 ## CI Pipeline Overview
 
-Every push to `develop` or `release/**` runs the full pipeline for the changed service:
+Every push to `develop` or `release/**` runs the full pipeline for the changed service
+(path filter `<service>/**`):
 
 ```
-1. Gitleaks (secret scan)
-2. Maven verify + JaCoCo coverage (≥ 80%)  — real PostgreSQL sidecar for DB services
-3. CodeQL SAST (security-extended queries)
-4. Semgrep SAST (p/java, p/spring-boot, p/owasp-top-ten)
-5. OWASP Dependency Check (CVSS ≥ 7.0)
-6. Docker build (multi-stage, non-root UID 1000)
-7. Trivy image scan (HIGH/CRITICAL, ignore-unfixed)
-8. ECR push → tag: sha-<7chars>
-9. Cosign keyless sign (GitHub OIDC → Fulcio → Rekor)
-10. Update envs/dev/values-<service>.yaml in zen-gitops → ArgoCD auto-syncs dev
-11. Open QA promotion PR in zen-gitops
+1. Maven verify + JaCoCo coverage  — real PostgreSQL sidecar for DB services
+   (Node services: npm ci + ESLint + Jest coverage gate ≥ 80%)
+2. CodeQL SAST (security-extended)          — disabled on forks (needs Code Scanning enabled)
+3. OWASP Dependency Check (Java) / npm audit (Node) — advisory, non-blocking
+4. Docker build (multi-stage, non-root UID 1000)
+5. Trivy image scan (HIGH/CRITICAL, ignore-unfixed) — advisory, non-blocking
+6. ECR push → tag: sha-<7chars>
+7. Cosign keyless sign (GitHub OIDC → Fulcio → Rekor)
+8. Update envs/dev/values-<service>.yaml in zen-gitops → ArgoCD auto-syncs dev
+9. Open QA promotion PR in zen-gitops
 ```
 
-Feature branch pushes run only steps 1–5 (~5 min, no Docker/ECR).
+> **Fork note:** on a fork without GitHub Code Scanning enabled, the CodeQL and "Upload SARIF"
+> steps are set to `if: false`, and the dependency/audit + Trivy gates are advisory
+> (non-blocking) in the reusable workflows (`_java-build.yml`, `_node-build.yml`). This lets the
+> build reach the ECR push + Cosign sign stages on a personal fork.
 
-**Authentication to AWS:** GitHub OIDC (no `AWS_ACCESS_KEY_ID` stored as a secret).
+Feature branch pushes (`feat/*`, `fix/*`, `chore/*`) run only the lightweight
+test + SAST check (no Docker/ECR).
 
-See [`zen-infra/docs/CICD-IMPLEMENTATION.md`](https://github.com/your-github-username/zen-infra/blob/main/docs/CICD-IMPLEMENTATION.md) for full architecture details.
+**Authentication to AWS:** GitHub OIDC (no `AWS_ACCESS_KEY_ID` stored as a secret) — assumes
+`arn:aws:iam::304312474711:role/pharma-dev-github-actions-role`.
 
 ---
 
@@ -150,12 +161,12 @@ docker run -p 8081:8081 auth-service:local
 
 See **[`implementation.md`](./implementation.md)** for the complete fork setup guide covering AWS OIDC, IAM role, ECR repos, GitHub secrets, ArgoCD, and GitOps layout.
 
-Quick checklist:
-1. Update the IAM role trust policy — replace the `sub` condition with `repo:YOUR_GITHUB_USERNAME/zen-pharma-backend:*` (missing org name is the most common failure)
+Quick checklist (already done for the `ajay-bj` fork):
+1. Update the IAM role trust policy — the `sub` condition allows `repo:ajay-bj/zen-pharma-backend-ajay:*` (missing org name is the most common failure)
 2. If you use a different IAM role name than `pharma-dev-github-actions-role`, update `role-to-assume` in `.github/workflows/_java-build.yml` and `_node-build.yml`
 3. Set the GitHub secrets and variable below
-4. Create the 8 ECR repositories in your AWS account
-5. Set `GITOPS_REPO` to point at your own gitops repo
+4. Create the 9 ECR repositories in your AWS account (one per service)
+5. Set `GITOPS_REPO` to point at your own gitops repo (`ajay-bj/zen-gitops-ajay`)
 
 ---
 
@@ -163,16 +174,15 @@ Quick checklist:
 
 Set in **Settings → Secrets and variables → Actions**:
 
-| Secret | Description |
-|---|---|
-| `AWS_ACCOUNT_ID` | Your 12-digit AWS account ID |
-| `GITOPS_TOKEN` | GitHub PAT with `contents: write` on `YOUR_GITHUB_USERNAME/zen-gitops` |
-| `SEMGREP_APP_TOKEN` | Semgrep Cloud token (optional) |
-| `NVD_API_KEY` | NIST NVD API key for OWASP Dep Check (optional, faster) |
+| Secret | Description | This fork |
+|---|---|---|
+| `AWS_ACCOUNT_ID` | Your 12-digit AWS account ID | `304312474711` |
+| `GITOPS_TOKEN` | GitHub PAT with `contents: write` on your gitops repo | set on `ajay-bj/zen-gitops-ajay` |
+| `NVD_API_KEY` | NIST NVD API key for OWASP Dep Check (optional, faster) | optional |
 
 | Variable | Value |
 |---|---|
-| `GITOPS_REPO` | `YOUR_GITHUB_USERNAME/zen-gitops` |
+| `GITOPS_REPO` | `ajay-bj/zen-gitops-ajay` |
 
 ---
 
