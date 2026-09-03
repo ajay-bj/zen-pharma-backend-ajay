@@ -1,0 +1,3 @@
+ci-trigger: 2026-09-03
+Reason: first CI run for qc-service. Publishes the qc-service image to ECR so
+ArgoCD can deploy it (pod currently ImagePullBackOff - ECR repo was empty).

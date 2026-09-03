@@ -1,0 +1,4 @@
+ci-retrigger: 2026-09-03
+Reason: rebuild after _node-build.yml security-gate fix (commit 6e15f73) so the
+notification-service image is published to ECR. The earlier run (ffb9d07) failed
+before pushing due to the Trivy SARIF upload step, now disabled on the fork.
