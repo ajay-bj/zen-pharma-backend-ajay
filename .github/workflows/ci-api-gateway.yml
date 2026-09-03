@@ -76,6 +76,7 @@ jobs:
   # ── 3. Open QA promotion PR in zen-gitops (PR merge = QA deployment) ─────
   open-qa-pr:
     name: Open PR — QA Promotion
+    if: false  # dev-only deployment: QA/prod promotion disabled on this fork
     needs: [build, deploy-dev]
     runs-on: ubuntu-latest
     steps:
